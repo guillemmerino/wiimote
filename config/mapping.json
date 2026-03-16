@@ -1,0 +1,44 @@
+{
+  "buttons_to_keys": {
+    "A": "KEY_SPACE",
+    "PLUS": "KEY_ENTER",
+    "MINUS": "KEY_BACKSPACE"
+  },
+  "buttons_to_mouse": {
+    "B": "BTN_LEFT"
+  },
+  "mouse_from_ir": {
+    "enabled": true,
+    "mode": "ir_priority_freeze",
+    "smoothing_alpha": 0.25,
+    "rel_scale_x": 1600,
+    "rel_scale_y": 900,
+    "max_delta": 40,
+    "invert_x": false,
+    "invert_y": false,
+    "calibration": {
+      "x_min": null,
+      "x_max": null,
+      "y_min": null,
+      "y_max": null
+    },
+    "recalibrate_button": "HOME",
+    "capture_button": "A"
+  },
+  "mouse_from_gyro": {
+    "enabled": false,
+    "x_axis": "y",
+    "y_axis": "x",
+    "invert_x": true,
+    "invert_y": true,
+    "sensitivity": 0.001,
+    "deadzone": 450,
+    "max_delta": 10,
+    "auto_calibrate": true,
+    "calibration_frames": 180,
+    "rest_threshold": 7000,
+    "drift_compensation": true,
+    "drift_alpha": 0.05,
+    "recalibrate_button": "HOME"
+  }
+}
