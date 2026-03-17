@@ -1,10 +1,10 @@
 from src.action_mapper import ActionMapper
 
 
-def _frame(buttons=None, gyro=None, ir=None):
+def _frame(buttons=None, accel=None, gyro=None, ir=None):
     return {
         "buttons": buttons or {},
-        "accel": {"x": None, "y": None, "z": None},
+        "accel": accel or {"x": None, "y": None, "z": None},
         "gyro": gyro or {"x": None, "y": None, "z": None},
         "ir": ir if ir is not None else [],
         "ts": 0.0,
@@ -23,13 +23,13 @@ def test_button_press_and_release_generate_actions():
 
     actions = mapper.process_frame(_frame(buttons={"A": 1, "B": 1}))
     names = {(a.kind, a.code, a.value) for a in actions}
-    assert ("key", "KEY_SPACE", 1) in names
-    assert ("mouse_button", "BTN_LEFT", 1) in names
+    assert ("key", "key:space", 1) in names
+    assert ("mouse_button", "mouse:left", 1) in names
 
     actions = mapper.process_frame(_frame(buttons={"A": 0, "B": 0}))
     names = {(a.kind, a.code, a.value) for a in actions}
-    assert ("key", "KEY_SPACE", 0) in names
-    assert ("mouse_button", "BTN_LEFT", 0) in names
+    assert ("key", "key:space", 0) in names
+    assert ("mouse_button", "mouse:left", 0) in names
 
 
 def test_ir_two_points_use_midpoint():
@@ -196,3 +196,33 @@ def test_gyro_mouse_still_works_when_ir_disabled():
     dx, dy = actions[0].value
     assert dx < 0
     assert dy < 0
+
+
+def test_accel_mouse_can_drive_cursor_when_enabled():
+    mapper = ActionMapper(
+        {
+            "buttons_to_keys": {},
+            "buttons_to_mouse": {},
+            "mouse_from_ir": {"enabled": False},
+            "mouse_from_gyro": {"enabled": False},
+            "mouse_from_accel": {
+                "enabled": True,
+                "x_axis": "x",
+                "y_axis": "y",
+                "invert_x": False,
+                "invert_y": True,
+                "sensitivity": 1.0,
+                "deadzone": 0,
+                "max_delta": 50,
+                "auto_calibrate": False,
+                "offset_x": 100,
+                "offset_y": 100,
+            },
+        }
+    )
+
+    actions = mapper.process_frame(_frame(accel={"x": 110, "y": 80, "z": 0}))
+    assert len(actions) == 1
+    dx, dy = actions[0].value
+    assert dx == 10
+    assert dy == 20

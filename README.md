@@ -21,6 +21,28 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+En Windows PowerShell:
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+```
+
+Si PowerShell bloquea `Activate.ps1` con un error de execution policy, habilitalo solo para la sesion actual:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+```
+
+Alternativa sin activar el entorno:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m src.main --help
+```
+
 ## Uso
 
 ### 1) Escanear dispositivos Bluetooth
@@ -59,6 +81,12 @@ Si quieres forzar backend Linux input:
 python -m src.main read --backend input
 ```
 
+Listar dispositivos HID compatibles:
+
+```bash
+python -m src.main list-devices
+```
+
 ### 4) Calibrar IR (recomendado antes de `control`)
 
 ```bash
@@ -88,6 +116,34 @@ Mapping por defecto: `config/mapping.json` (puedes pasar `--mapping /ruta/a/otro
 Parámetros IR clave: `mouse_from_ir.enabled`, `mode`, `smoothing_alpha`, `calibration`, `recalibrate_button`, `capture_button`.
 Si desactivas IR (`mouse_from_ir.enabled=false`), vuelve el control por gyro (`mouse_from_gyro`).
 
+### Uso en Windows
+
+- el emparejado del Wiimote se hace manualmente desde la configuracion Bluetooth de Windows
+- `scan`, `pair-connect` y `connect` no estan soportados en Windows
+- usa `list-devices` para localizar el `device path` HID y luego `read` o `control`
+- el backend recomendado es `--backend windows-hid` o `--backend auto`
+- el backend HID de Windows intenta inicializar Motion Plus e IR automaticamente al empezar a leer
+- en Windows el soporte de gyro e IR depende del modelo de Wiimote, del Motion Plus y de como el stack Bluetooth exponga el HID
+- `calibrate-ir` puede usarse tambien en Windows si el backend HID devuelve puntos IR validos
+
+Ejemplos:
+
+```bash
+python -m src.main list-devices
+python -m src.main read --backend windows-hid --device-path "<device-path>"
+python -m src.main calibrate-ir --backend windows-hid --device-path "<device-path>"
+python -m src.main control --backend windows-hid --device-path "<device-path>" --dry-run
+```
+
+Ejemplo completo en PowerShell usando el `venv` sin depender de la activacion:
+
+```powershell
+.\.venv\Scripts\python.exe -m src.main list-devices
+.\.venv\Scripts\python.exe -m src.main read --backend windows-hid --device-path "<device-path>"
+.\.venv\Scripts\python.exe -m src.main calibrate-ir --backend windows-hid --device-path "<device-path>"
+.\.venv\Scripts\python.exe -m src.main control --backend windows-hid --device-path "<device-path>" --dry-run
+```
+
 Salida esperada:
 
 ```json
@@ -104,6 +160,48 @@ Salida esperada:
   ]
 }
 ```
+
+## Docker
+
+Build de la imagen:
+
+```bash
+docker compose build
+```
+
+Validar el entorno con tests:
+
+```bash
+docker compose run --rm wiimote python -m pytest -q
+```
+
+Mostrar la ayuda del CLI:
+
+```bash
+docker compose run --rm wiimote
+```
+
+Ejecutar un comando del proyecto dentro del contenedor:
+
+```bash
+docker compose run --rm wiimote python -m src.main scan --seconds 8
+```
+
+Perfil para host Linux con Bluetooth y dispositivos de entrada reales:
+
+```bash
+docker compose --profile linux-hw run --rm wiimote-hw python -m src.main scan --seconds 8
+docker compose --profile linux-hw run --rm wiimote-hw python -m src.main read --backend input
+docker compose --profile linux-hw run --rm wiimote-hw python -m src.main control --backend input --dry-run
+```
+
+Notas importantes para uso real con Wiimote:
+
+- el proyecto depende de Linux, BlueZ y acceso a Bluetooth del host
+- para `scan`, `pair-connect`, `connect`, `read` o `control` hace falta un host Linux con `bluetoothctl` operativo
+- para `read --backend input` y `control` tambien hace falta exponer `/dev/input`, `/dev/uinput` y normalmente ejecutar el contenedor con privilegios elevados
+- en Docker Desktop sobre Windows o macOS puedes construir la imagen y ejecutar tests, pero no es un entorno valido para acceder al Wiimote del host
+- el servicio `wiimote-hw` del compose esta pensado para Docker Engine en Linux; en Windows no te dara acceso al Bluetooth nativo del sistema
 
 ## Tests
 

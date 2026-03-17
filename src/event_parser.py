@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from typing import Any
 
 from .wiimote_protocol import BUTTON_MASKS, parse_report
 
@@ -13,7 +14,7 @@ class WiimoteEvent:
     timestamp: float
     kind: str
     name: str
-    value: int | tuple[int, int, int]
+    value: Any
 
 
 class EventParser:
@@ -40,5 +41,10 @@ class EventParser:
         if parsed.accel is not None:
             events.append(WiimoteEvent(now, "accel", "ACCEL", parsed.accel))
 
-        return events
+        if parsed.motion_plus is not None:
+            events.append(WiimoteEvent(now, "gyro", "GYRO", parsed.motion_plus))
 
+        if parsed.ir is not None:
+            events.append(WiimoteEvent(now, "ir", "IR", parsed.ir))
+
+        return events

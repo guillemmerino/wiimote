@@ -1,11 +1,11 @@
 {
   "buttons_to_keys": {
-    "A": "KEY_SPACE",
-    "PLUS": "KEY_ENTER",
-    "MINUS": "KEY_BACKSPACE"
+    "A": "key:space",
+    "PLUS": "key:enter",
+    "MINUS": "key:backspace"
   },
   "buttons_to_mouse": {
-    "B": "BTN_LEFT"
+    "B": "mouse:left"
   },
   "mouse_from_ir": {
     "enabled": true,
@@ -39,6 +39,19 @@
     "rest_threshold": 7000,
     "drift_compensation": true,
     "drift_alpha": 0.05,
+    "recalibrate_button": "HOME"
+  },
+  "mouse_from_accel": {
+    "enabled": false,
+    "x_axis": "x",
+    "y_axis": "y",
+    "invert_x": false,
+    "invert_y": true,
+    "sensitivity": 0.4,
+    "deadzone": 4,
+    "max_delta": 20,
+    "auto_calibrate": true,
+    "calibration_frames": 90,
     "recalibrate_button": "HOME"
   }
 }

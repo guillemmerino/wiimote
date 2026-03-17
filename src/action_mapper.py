@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .action_codes import normalize_key_code, normalize_mouse_button_code
+
 
 @dataclass(frozen=True)
 class Action:
@@ -25,12 +27,12 @@ class Action:
 
 DEFAULT_MAPPING: dict[str, Any] = {
     "buttons_to_keys": {
-        "A": "KEY_SPACE",
-        "PLUS": "KEY_ENTER",
-        "MINUS": "KEY_BACKSPACE",
+        "A": "key:space",
+        "PLUS": "key:enter",
+        "MINUS": "key:backspace",
     },
     "buttons_to_mouse": {
-        "B": "BTN_LEFT",
+        "B": "mouse:left",
     },
     "mouse_from_ir": {
         "enabled": True,
@@ -66,6 +68,19 @@ DEFAULT_MAPPING: dict[str, Any] = {
         "drift_alpha": 0.02,
         "recalibrate_button": "HOME",
     },
+    "mouse_from_accel": {
+        "enabled": False,
+        "x_axis": "x",
+        "y_axis": "y",
+        "invert_x": False,
+        "invert_y": True,
+        "sensitivity": 0.4,
+        "deadzone": 4,
+        "max_delta": 20,
+        "auto_calibrate": True,
+        "calibration_frames": 90,
+        "recalibrate_button": "HOME",
+    },
 }
 
 
@@ -95,10 +110,17 @@ def extract_ir_pointer(ir_points: Any) -> tuple[float, float] | None:
 class ActionMapper:
     def __init__(self, mapping: dict[str, Any] | None = None) -> None:
         cfg = mapping or DEFAULT_MAPPING
-        self.buttons_to_keys: dict[str, str] = dict(cfg.get("buttons_to_keys") or {})
-        self.buttons_to_mouse: dict[str, str] = dict(cfg.get("buttons_to_mouse") or {})
+        self.buttons_to_keys = {
+            button: normalize_key_code(code)
+            for button, code in dict(cfg.get("buttons_to_keys") or {}).items()
+        }
+        self.buttons_to_mouse = {
+            button: normalize_mouse_button_code(code)
+            for button, code in dict(cfg.get("buttons_to_mouse") or {}).items()
+        }
         self.mouse_from_gyro: dict[str, Any] = dict(cfg.get("mouse_from_gyro") or {})
         self.mouse_from_ir: dict[str, Any] = dict(cfg.get("mouse_from_ir") or {})
+        self.mouse_from_accel: dict[str, Any] = dict(cfg.get("mouse_from_accel") or {})
 
         self._button_state: dict[str, int] = {}
         self._edge_button_state: dict[str, int] = {}
@@ -113,6 +135,16 @@ class ActionMapper:
         self._calibration_sum: dict[str, float] = {"x": 0.0, "y": 0.0, "z": 0.0}
         self._is_calibrated = not bool(self.mouse_from_gyro.get("auto_calibrate", True))
 
+        self._accel_offsets: dict[str, float] = {
+            "x": float(self.mouse_from_accel.get("offset_x", 0.0)),
+            "y": float(self.mouse_from_accel.get("offset_y", 0.0)),
+            "z": float(self.mouse_from_accel.get("offset_z", 0.0)),
+        }
+        self._accel_calibration_target = max(0, int(self.mouse_from_accel.get("calibration_frames", 90)))
+        self._accel_calibration_samples = 0
+        self._accel_calibration_sum: dict[str, float] = {"x": 0.0, "y": 0.0, "z": 0.0}
+        self._accel_is_calibrated = not bool(self.mouse_from_accel.get("auto_calibrate", True))
+
         self._ir_filtered_norm: tuple[float, float] | None = None
         self._ir_last_output_norm: tuple[float, float] | None = None
 
@@ -124,6 +156,12 @@ class ActionMapper:
 
     def using_ir_mouse(self) -> bool:
         return bool(self.mouse_from_ir.get("enabled", False))
+
+    def using_gyro_mouse(self) -> bool:
+        return bool(self.mouse_from_gyro.get("enabled", False))
+
+    def using_accel_mouse(self) -> bool:
+        return bool(self.mouse_from_accel.get("enabled", False))
 
     def has_ir_calibration(self) -> bool:
         cal = self._get_ir_calibration()
@@ -145,23 +183,44 @@ class ActionMapper:
 
             dx, dy = self._ir_mouse_delta(frame.get("ir"))
             if dx or dy:
-                actions.append(Action(kind="mouse_move", code="REL", value=(dx, dy)))
+                actions.append(Action(kind="mouse_move", code="mouse:move", value=(dx, dy)))
             return actions
 
         if isinstance(buttons, dict):
-            gyro_recal_btn = str(self.mouse_from_gyro.get("recalibrate_button", "")).strip().upper()
-            if gyro_recal_btn and self._button_pressed_edge(buttons, gyro_recal_btn):
-                self.start_recalibration()
+            if self.using_gyro_mouse():
+                gyro_recal_btn = str(self.mouse_from_gyro.get("recalibrate_button", "")).strip().upper()
+                if gyro_recal_btn and self._button_pressed_edge(buttons, gyro_recal_btn):
+                    self.start_recalibration()
+            elif self.using_accel_mouse():
+                accel_recal_btn = str(self.mouse_from_accel.get("recalibrate_button", "")).strip().upper()
+                if accel_recal_btn and self._button_pressed_edge(buttons, accel_recal_btn):
+                    self.start_accel_recalibration()
 
-        gyro = frame.get("gyro")
-        if isinstance(gyro, dict):
-            dx, dy = self._gyro_mouse_delta(gyro)
+        if self.using_gyro_mouse():
+            gyro = frame.get("gyro")
+            if isinstance(gyro, dict):
+                dx, dy = self._gyro_mouse_delta(gyro)
+                if dx or dy:
+                    actions.append(Action(kind="mouse_move", code="mouse:move", value=(dx, dy)))
+            return actions
+
+        accel = frame.get("accel")
+        if self.using_accel_mouse() and isinstance(accel, dict):
+            dx, dy = self._accel_mouse_delta(accel)
             if dx or dy:
-                actions.append(Action(kind="mouse_move", code="REL", value=(dx, dy)))
+                actions.append(Action(kind="mouse_move", code="mouse:move", value=(dx, dy)))
         return actions
 
     def calibration_status(self) -> tuple[bool, int, int]:
-        return (self._is_calibrated, self._calibration_samples, self._calibration_target)
+        if self.using_gyro_mouse():
+            return (self._is_calibrated, self._calibration_samples, self._calibration_target)
+        if self.using_accel_mouse():
+            return (
+                self._accel_is_calibrated,
+                self._accel_calibration_samples,
+                self._accel_calibration_target,
+            )
+        return (True, 0, 0)
 
     def start_recalibration(self) -> None:
         if self._calibration_target <= 0:
@@ -171,9 +230,26 @@ class ActionMapper:
         self._calibration_samples = 0
         self._calibration_sum = {"x": 0.0, "y": 0.0, "z": 0.0}
 
+    def start_accel_recalibration(self) -> None:
+        if self._accel_calibration_target <= 0:
+            self._accel_is_calibrated = True
+            return
+        self._accel_is_calibrated = False
+        self._accel_calibration_samples = 0
+        self._accel_calibration_sum = {"x": 0.0, "y": 0.0, "z": 0.0}
+
     def reset_ir_runtime(self) -> None:
         self._ir_filtered_norm = None
         self._ir_last_output_norm = None
+
+    def active_mouse_source(self) -> str:
+        if self.using_ir_mouse():
+            return "ir"
+        if self.using_gyro_mouse():
+            return "gyro"
+        if self.using_accel_mouse():
+            return "accel"
+        return "none"
 
     def _button_pressed_edge(self, buttons: dict[str, Any], button_name: str) -> bool:
         state = 1 if self._as_int(buttons.get(button_name)) else 0
@@ -316,6 +392,38 @@ class ActionMapper:
         dy = self._scale_axis(int(gy), sensitivity, deadzone, max_delta)
         return (dx, dy)
 
+    def _accel_mouse_delta(self, accel: dict[str, Any]) -> tuple[int, int]:
+        cfg = self.mouse_from_accel
+        if not bool(cfg.get("enabled", False)):
+            return (0, 0)
+
+        x_axis = str(cfg.get("x_axis", "x"))
+        y_axis = str(cfg.get("y_axis", "y"))
+        ax_raw = self._as_int(accel.get(x_axis))
+        ay_raw = self._as_int(accel.get(y_axis))
+        if ax_raw is None or ay_raw is None:
+            return (0, 0)
+
+        self._update_accel_calibration(accel)
+        if not self._accel_is_calibrated:
+            return (0, 0)
+
+        ax = float(ax_raw) - self._accel_offsets.get(x_axis, 0.0)
+        ay = float(ay_raw) - self._accel_offsets.get(y_axis, 0.0)
+
+        if bool(cfg.get("invert_x", False)):
+            ax = -ax
+        if bool(cfg.get("invert_y", True)):
+            ay = -ay
+
+        sensitivity = float(cfg.get("sensitivity", 0.4))
+        deadzone = int(cfg.get("deadzone", 4))
+        max_delta = int(cfg.get("max_delta", 20))
+
+        dx = self._scale_axis(int(round(ax)), sensitivity, deadzone, max_delta)
+        dy = self._scale_axis(int(round(ay)), sensitivity, deadzone, max_delta)
+        return (dx, dy)
+
     def _update_calibration(self, gyro: dict[str, Any]) -> None:
         if self._is_calibrated or self._calibration_target <= 0:
             self._is_calibrated = True
@@ -337,6 +445,28 @@ class ActionMapper:
             self._gyro_offsets["y"] = self._calibration_sum["y"] / count
             self._gyro_offsets["z"] = self._calibration_sum["z"] / count
             self._is_calibrated = True
+
+    def _update_accel_calibration(self, accel: dict[str, Any]) -> None:
+        if self._accel_is_calibrated or self._accel_calibration_target <= 0:
+            self._accel_is_calibrated = True
+            return
+
+        x = self._as_int(accel.get("x"))
+        y = self._as_int(accel.get("y"))
+        z = self._as_int(accel.get("z"))
+        if x is None or y is None or z is None:
+            return
+
+        self._accel_calibration_sum["x"] += float(x)
+        self._accel_calibration_sum["y"] += float(y)
+        self._accel_calibration_sum["z"] += float(z)
+        self._accel_calibration_samples += 1
+        if self._accel_calibration_samples >= self._accel_calibration_target:
+            count = float(self._accel_calibration_samples)
+            self._accel_offsets["x"] = self._accel_calibration_sum["x"] / count
+            self._accel_offsets["y"] = self._accel_calibration_sum["y"] / count
+            self._accel_offsets["z"] = self._accel_calibration_sum["z"] / count
+            self._accel_is_calibrated = True
 
     def _update_drift_offsets(self, x_axis: str, y_axis: str, gx: float, gy: float) -> None:
         cfg = self.mouse_from_gyro
@@ -386,4 +516,3 @@ def _as_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
-

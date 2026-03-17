@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .action_codes import evdev_code_from_neutral
 from .action_mapper import Action
 
 
@@ -63,12 +64,12 @@ class UInputDevice:
             self._ui.syn()
 
     def _build_capabilities(self, key_codes: set[str], mouse_buttons: set[str]) -> _Capabilities:
-        combined = set(key_codes) | set(mouse_buttons) | {"BTN_LEFT", "BTN_RIGHT"}
+        combined = set(key_codes) | set(mouse_buttons) | {"mouse:left", "mouse:right"}
         resolved = [self._resolve_code(name) for name in sorted(combined)]
         return _Capabilities(key_codes=resolved)
 
     def _resolve_code(self, name: str) -> int:
-        value = self._ecodes.ecodes.get(name)
+        value = self._ecodes.ecodes.get(evdev_code_from_neutral(name))
         if isinstance(value, int):
             return value
         raise RuntimeError(f"Codigo de input desconocido en mapping: {name}")
