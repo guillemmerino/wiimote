@@ -97,6 +97,7 @@ Flujo:
 - apunta a cada esquina cuando lo pida (TL, TR, BR, BL)
 - pulsa `A` para capturar cada punto
 - se guardan bounds en `config/mapping.json`
+- por defecto se abre una vista grafica con los puntos IR en tiempo real; usa `--no-gui` si prefieres solo consola
 
 ### 5) Modo control (teclado/raton virtual)
 
@@ -113,7 +114,7 @@ python -m src.main control --backend input
 ```
 
 Mapping por defecto: `config/mapping.json` (puedes pasar `--mapping /ruta/a/otro.json`).
-Parámetros IR clave: `mouse_from_ir.enabled`, `mode`, `smoothing_alpha`, `calibration`, `recalibrate_button`, `capture_button`.
+Parámetros IR clave: `mouse_from_ir.enabled`, `mode`, `smoothing_alpha`, `calibration`, `screen_edge_trim`, `recalibrate_button`, `capture_button`.
 Si desactivas IR (`mouse_from_ir.enabled=false`), vuelve el control por gyro (`mouse_from_gyro`).
 
 ### Uso en Windows
@@ -122,16 +123,14 @@ Si desactivas IR (`mouse_from_ir.enabled=false`), vuelve el control por gyro (`m
 - `scan`, `pair-connect` y `connect` no estan soportados en Windows
 - usa `list-devices` para localizar el `device path` HID y luego `read` o `control`
 - el backend recomendado es `--backend windows-hid` o `--backend auto`
-- el backend HID de Windows intenta inicializar Motion Plus e IR automaticamente al empezar a leer
-- en Windows el soporte de gyro e IR depende del modelo de Wiimote, del Motion Plus y de como el stack Bluetooth exponga el HID
-- `calibrate-ir` puede usarse tambien en Windows si el backend HID devuelve puntos IR validos
+- en el MVP actual Windows soporta botones, clicks y movimiento basado en `mouse_from_accel`
+- `calibrate-ir` no esta soportado en Windows porque el backend HID actual no expone IR util
 
 Ejemplos:
 
 ```bash
 python -m src.main list-devices
 python -m src.main read --backend windows-hid --device-path "<device-path>"
-python -m src.main calibrate-ir --backend windows-hid --device-path "<device-path>"
 python -m src.main control --backend windows-hid --device-path "<device-path>" --dry-run
 ```
 
@@ -140,7 +139,6 @@ Ejemplo completo en PowerShell usando el `venv` sin depender de la activacion:
 ```powershell
 .\.venv\Scripts\python.exe -m src.main list-devices
 .\.venv\Scripts\python.exe -m src.main read --backend windows-hid --device-path "<device-path>"
-.\.venv\Scripts\python.exe -m src.main calibrate-ir --backend windows-hid --device-path "<device-path>"
 .\.venv\Scripts\python.exe -m src.main control --backend windows-hid --device-path "<device-path>" --dry-run
 ```
 

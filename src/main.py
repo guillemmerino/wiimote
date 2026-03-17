@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 import sys
+import time
 from typing import Any, Callable
 
 from .action_sinks import create_action_sink
@@ -20,6 +21,7 @@ from .frame_sources import (
     is_windows_platform,
     list_wiimote_hid_devices,
 )
+from .ir_calibration_ui import IRCalibrationPreview
 
 
 DEFAULT_MAPPING_PATH = Path(__file__).resolve().parent.parent / "config" / "mapping.json"
@@ -60,7 +62,11 @@ def save_mapping(path: Path, payload: dict[str, Any]) -> None:
         raise RuntimeError(f"No se pudo guardar mapping: {path}: {exc}") from exc
 
 
-def compute_ir_calibration_bounds(corners: dict[str, tuple[float, float]]) -> dict[str, float]:
+def compute_ir_calibration_bounds(
+    corners: dict[str, tuple[float, float]],
+    *,
+    screen_edge_trim: float = 0.0,
+) -> dict[str, Any]:
     required = ("TL", "TR", "BR", "BL")
     missing = [name for name in required if name not in corners]
     if missing:
@@ -71,22 +77,45 @@ def compute_ir_calibration_bounds(corners: dict[str, tuple[float, float]]) -> di
     br = corners["BR"]
     bl = corners["BL"]
 
-    x_min = (tl[0] + bl[0]) / 2.0
-    x_max = (tr[0] + br[0]) / 2.0
-    y_min = (tl[1] + tr[1]) / 2.0
-    y_max = (bl[1] + br[1]) / 2.0
+    left_x = (tl[0] + bl[0]) / 2.0
+    right_x = (tr[0] + br[0]) / 2.0
+    top_y = (tl[1] + tr[1]) / 2.0
+    bottom_y = (bl[1] + br[1]) / 2.0
+
+    invert_x = left_x > right_x
+    invert_y = top_y > bottom_y
+
+    x_min = min(left_x, right_x)
+    x_max = max(left_x, right_x)
+    y_min = min(top_y, bottom_y)
+    y_max = max(top_y, bottom_y)
+
+    trim = max(0.0, min(0.35, float(screen_edge_trim)))
+    if trim:
+        span_x = x_max - x_min
+        span_y = y_max - y_min
+        x_min += span_x * trim
+        x_max -= span_x * trim
+        y_min += span_y * trim
+        y_max -= span_y * trim
 
     if x_max - x_min < 20 or y_max - y_min < 20:
         raise RuntimeError(
             "Calibracion IR invalida (rango demasiado pequeno). "
+            f"x_span={x_max - x_min:.1f}, y_span={y_max - y_min:.1f}. "
             "Repite la calibracion apuntando bien a cada esquina."
         )
 
     return {
-        "x_min": round(x_min, 3),
-        "x_max": round(x_max, 3),
-        "y_min": round(y_min, 3),
-        "y_max": round(y_max, 3),
+        "bounds": {
+            "x_min": round(x_min, 3),
+            "x_max": round(x_max, 3),
+            "y_min": round(y_min, 3),
+            "y_max": round(y_max, 3),
+        },
+        "invert_x": invert_x,
+        "invert_y": invert_y,
+        "screen_edge_trim": trim,
     }
 
 
@@ -99,6 +128,44 @@ def print_ir_capture_summary(corners: dict[str, tuple[float, float]]) -> None:
             print(f"  {key}: (sin capturar)")
             continue
         print(f"  {key}: x={point[0]:.1f}, y={point[1]:.1f}")
+
+
+def count_visible_ir_points(ir_points: Any) -> int:
+    if not isinstance(ir_points, list):
+        return 0
+    count = 0
+    for point in ir_points:
+        if not isinstance(point, dict):
+            continue
+        if point.get("x") is None or point.get("y") is None:
+            continue
+        count += 1
+    return count
+
+
+def format_ir_preview(point: tuple[float, float] | None, visible_count: int, target_key: str) -> str:
+    if point is None:
+        return f"Vista IR [{target_key}] visible={visible_count} sin punto valido. Pulsa A cuando veas el puntero."
+
+    x_bar = _axis_preview_bar(point[0], axis_max=1023.0, width=24)
+    y_bar = _axis_preview_bar(point[1], axis_max=767.0, width=18)
+    return (
+        f"Vista IR [{target_key}] visible={visible_count} "
+        f"x={point[0]:6.1f} {x_bar} "
+        f"y={point[1]:6.1f} {y_bar} "
+        "Pulsa A para capturar."
+    )
+
+
+def _axis_preview_bar(value: float, axis_max: float, width: int) -> str:
+    if width <= 1:
+        return "[]"
+    clamped = max(0.0, min(axis_max, value))
+    ratio = 0.0 if axis_max <= 0 else clamped / axis_max
+    idx = min(width - 1, max(0, int(round(ratio * (width - 1)))))
+    chars = ["-"] * width
+    chars[idx] = "*"
+    return "[" + "".join(chars) + "]"
 
 
 def _create_frame_source(args: argparse.Namespace) -> HIDFrameSource | LinuxInputFrameSource | FallbackFrameSource:
@@ -209,6 +276,8 @@ def cmd_calibrate_ir(args: argparse.Namespace) -> int:
 
     capture_button = str(ir_cfg.get("capture_button", "A")).strip().upper() or "A"
     ir_cfg["capture_button"] = capture_button
+    screen_edge_trim = float(ir_cfg.get("screen_edge_trim", 0.28))
+    ir_cfg["screen_edge_trim"] = screen_edge_trim
 
     steps = [
         ("TL", "esquina superior izquierda"),
@@ -219,59 +288,103 @@ def cmd_calibrate_ir(args: argparse.Namespace) -> int:
     captured: dict[str, tuple[float, float]] = {}
     current_idx = 0
     last_button_state = 0
+    last_preview_line = ""
+    last_preview_ts = 0.0
+    preview = IRCalibrationPreview.create() if args.gui else IRCalibrationPreview.disabled()
 
     print("Calibracion IR iniciada.")
     print(f"Paso 1/4: apunta a {steps[0][1]} y pulsa {capture_button}.")
+    if preview.is_available():
+        preview.set_status(f"Target TL. Press {capture_button} to capture.")
+    else:
+        print("Vista grafica no disponible. Se mantiene la vista previa por consola.")
 
     def on_frame(frame: dict[str, Any]) -> None:
-        nonlocal current_idx, last_button_state
+        nonlocal current_idx, last_button_state, last_preview_line, last_preview_ts
         buttons = frame.get("buttons")
         if not isinstance(buttons, dict):
             return
+
+        point = extract_ir_pointer(frame.get("ir"))
+        visible_count = count_visible_ir_points(frame.get("ir"))
+        target_key = steps[current_idx][0]
+        target_desc = steps[current_idx][1]
+        preview_invert_x = bool(ir_cfg.get("invert_x", False))
+        preview_invert_y = bool(ir_cfg.get("invert_y", False))
+        if preview.is_available():
+            preview.redraw(
+                point=point,
+                visible_count=visible_count,
+                target_key=target_key,
+                target_desc=target_desc,
+                captured=captured,
+                invert_x=preview_invert_x,
+                invert_y=preview_invert_y,
+            )
+        else:
+            preview_line = format_ir_preview(point, visible_count, target_key)
+            now = time.monotonic()
+            if preview_line != last_preview_line or (now - last_preview_ts) >= 0.15:
+                print(f"\r{preview_line}", end="", flush=True)
+                last_preview_line = preview_line
+                last_preview_ts = now
+
         current_state = 1 if int(buttons.get(capture_button, 0)) else 0
         pressed_edge = current_state == 1 and last_button_state == 0
         last_button_state = current_state
         if not pressed_edge:
             return
 
-        point = extract_ir_pointer(frame.get("ir"))
+        if not preview.is_available():
+            print()
         if point is None:
+            preview.set_status("No valid IR point visible. Try again in the same corner.")
             print("No hay puntos IR validos visibles. Reintenta en la misma esquina.", flush=True)
             return
 
         key, description = steps[current_idx]
         captured[key] = point
+        preview.set_status(f"Captured {key} at ({point[0]:.1f}, {point[1]:.1f})")
         print(f"Capturado {key} ({description}): x={point[0]:.1f}, y={point[1]:.1f}", flush=True)
         current_idx += 1
         if current_idx >= len(steps):
             raise _IRCalibrationDone
         next_key, next_desc = steps[current_idx]
+        preview.set_status(f"Target {next_key}. Press {capture_button} to capture.")
         print(f"Paso {current_idx + 1}/4: apunta a {next_desc} y pulsa {capture_button}.", flush=True)
 
     try:
         _run_read_backend(args, on_frame=on_frame, emit_json=args.print_frames, announce=False)
     except _IRCalibrationDone:
         pass
+    finally:
+        preview.close()
 
     print_ir_capture_summary(captured)
 
     if len(captured) < 4:
         raise RuntimeError("Calibracion IR cancelada o incompleta.")
 
-    bounds = compute_ir_calibration_bounds(captured)
+    calibration_result = compute_ir_calibration_bounds(captured, screen_edge_trim=screen_edge_trim)
+    bounds = calibration_result["bounds"]
     ir_cfg["enabled"] = bool(ir_cfg.get("enabled", True))
     ir_cfg["mode"] = str(ir_cfg.get("mode", "ir_priority_freeze"))
     ir_cfg["smoothing_alpha"] = float(ir_cfg.get("smoothing_alpha", 0.25))
     ir_cfg["rel_scale_x"] = float(ir_cfg.get("rel_scale_x", 1600))
     ir_cfg["rel_scale_y"] = float(ir_cfg.get("rel_scale_y", 900))
     ir_cfg["max_delta"] = int(ir_cfg.get("max_delta", 40))
+    ir_cfg["invert_x"] = bool(calibration_result["invert_x"])
+    ir_cfg["invert_y"] = bool(calibration_result["invert_y"])
     ir_cfg["recalibrate_button"] = str(ir_cfg.get("recalibrate_button", "HOME")).strip().upper() or "HOME"
     ir_cfg["calibration"] = bounds
 
     save_mapping(args.mapping, mapping)
     print(
         "Calibracion IR guardada en mapping: "
-        f"x_min={bounds['x_min']}, x_max={bounds['x_max']}, y_min={bounds['y_min']}, y_max={bounds['y_max']}"
+        f"x_min={bounds['x_min']}, x_max={bounds['x_max']}, "
+        f"y_min={bounds['y_min']}, y_max={bounds['y_max']}, "
+        f"invert_x={ir_cfg['invert_x']}, invert_y={ir_cfg['invert_y']}, "
+        f"screen_edge_trim={ir_cfg['screen_edge_trim']}"
     )
     return 0
 
@@ -390,6 +503,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Imprime frames JSON durante la calibracion",
     )
+    p_cal_ir.add_argument(
+        "--no-gui",
+        dest="gui",
+        action="store_false",
+        help="Desactiva la vista grafica y usa solo la vista previa por consola",
+    )
+    p_cal_ir.set_defaults(gui=True)
     p_cal_ir.set_defaults(func=cmd_calibrate_ir)
 
     p_control = sub.add_parser("control", help="Mapea el Wiimote a teclado/raton virtual")

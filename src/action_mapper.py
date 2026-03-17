@@ -27,12 +27,11 @@ class Action:
 
 DEFAULT_MAPPING: dict[str, Any] = {
     "buttons_to_keys": {
-        "A": "key:space",
         "PLUS": "key:enter",
         "MINUS": "key:backspace",
     },
     "buttons_to_mouse": {
-        "B": "mouse:left",
+        "A": "mouse:left",
     },
     "mouse_from_ir": {
         "enabled": True,
@@ -49,6 +48,7 @@ DEFAULT_MAPPING: dict[str, Any] = {
             "y_min": None,
             "y_max": None,
         },
+        "screen_edge_trim": 0.28,
         "recalibrate_button": "HOME",
         "capture_button": "A",
     },
